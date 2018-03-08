@@ -1,0 +1,142 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Bill Ostaski"
+date: "March 8, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+This project involves creating predictive models using data from the Weight Lifting Exercises Dataset,
+which can be found at the Human Activity Recognition (HAR) Project (http://groupware.les.inf.puc-rio.br/har). Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). The actual study and methodology can be found at: http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf
+
+## Question
+
+Can the 5 different fashions, Classes A through E, be predicted accurately through predictive models?
+
+## Input Data
+
+We were provided training and testing data sets gathered from accelerometers on the belt, forearm, arm and dumbell of the participants in a machine learning algorithm.
+
+```{r download-read}
+# download and read in the data sets
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(url=trainURL, destfile="pml-training.csv")
+download.file(url=testURL, destfile="pml-testing.csv")
+
+# noticed many "#DIV/0!" strings in pml-training.csv
+trainDF <- read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+testDF <- read.csv("pml-testing.csv", na.strings=c("NA",""))
+
+# verifying column names are identical in trainDF and testDF (except classe in trainDF)
+# the "classe" variable in the training set is the outcome we want to predict
+all.equal(colnames(trainDF)[1:length(colnames(trainDF))-1],colnames(testDF)[1:length(colnames(trainDF))-1])
+```
+
+## Features
+
+Tranforming the data to only include variables needed to build the models (removing variables with a lot of NAs, those that do not pertain to accelerometer measurements and variables with near zero variance)
+
+```{r features}
+dim(trainDF); dim(testDF)
+
+
+# there are a lot of columns with NAs, so let's remove them
+trainDF <- trainDF[, colSums(is.na(trainDF)) == 0]
+testDF <- testDF[, colSums(is.na(testDF)) == 0] 
+
+# let's also remove columns that do not pertain to accelerometer measurements
+classe <- trainDF$classe # saving for later
+trainRM <- grepl("^X|timestamp|window", names(trainDF))
+trainDF <- trainDF[, !trainRM]
+trainDF <- trainDF[, sapply(trainDF, is.numeric)]
+trainDF$classe <- classe
+
+testRM <- grepl("^X|timestamp|window", names(testDF))
+testDF <- testDF[, !testRM]
+testDF <- testDF[, sapply(testDF, is.numeric)]
+
+dim(trainDF); dim(testDF)
+
+all.equal(colnames(trainDF)[1:length(colnames(trainDF))-1], colnames(testDF)[1:length(colnames(trainDF))-1])
+
+# checking for variables that have less than 10% variability
+library(caret)
+nearZeroVar(trainDF, saveMetrics=TRUE)
+```
+Since the nzv values are all FALSE, there is no need to remove any variables.
+
+## Algorithm
+
+```{r algorithm}
+# splitting the training data frame into 2 sets: train (70%) and test (30%)
+set.seed(333)
+inTrain <- createDataPartition(trainDF$classe, p = 0.7, list=FALSE)
+train <- trainDF[inTrain,]
+test <- trainDF[-inTrain,]
+
+dim(train); dim(test)
+
+# using 3 algorithm models: gradient boosting, classification and regression trees and random forest
+# creating a 5-fold cross validation parameter for trControl
+crossVal <- trainControl(method='cv', number = 5)
+```
+```{r modGBM, results="hide"}
+modGBM <- train(classe ~ ., data=train, trControl=crossVal, method='gbm')
+
+modCART <- train(classe ~ ., data=train, trControl=crossVal, method='rpart')
+
+modRF <- train(classe ~ ., data=train, trControl=crossVal, method='rf', ntree=250)
+```
+
+## Evaluation
+
+```{r evaluation}
+# checking these models' performance
+predGBM <- predict(modGBM, newdata=test)
+cmGBM <- confusionMatrix(predGBM, test$classe)
+
+predCART <- predict(modCART, newdata=test)
+cmCART <- confusionMatrix(predCART, test$classe)
+
+predRF <- predict(modRF, newdata=test)
+cmRF <- confusionMatrix(predRF, test$classe)
+
+accuracy <- data.frame(Model = c('GBM', 'CART', 'RF'), 
+                       Accuracy = rbind(cmGBM$overall[1], cmCART$overall[1], cmRF$overall[1])
+                      )
+accuracy
+
+# as we can see, the random forest model is the most accurate with an expected out of sample error of
+# .6% (1 - .994 = 0.006 * 100) and the gradient boosting model a close second
+# checking the confusion matrix for the random forest model
+cmRF
+
+# so let's use the random forest model on testDF
+predTestDF <- predict(modRF, newdata=testDF)
+resultsTestDF <- data.frame(problem_id=testDF$problem_id, predicted=predTestDF)
+resultsTestDF
+```
+
+## Figures
+
+Correlation Matrix Visualization
+
+```{r cmv}
+library(corrplot)
+corrPlot <- cor(trainDF[, -length(names(trainDF))])
+corrplot(corrPlot, method="color")
+```
+
+Decision Tree Visualization
+
+```{r dtv}
+library(rpart.plot)
+treeModel <- rpart(classe ~ ., data=trainDF, method="class")
+rpart.plot(treeModel)
+```
